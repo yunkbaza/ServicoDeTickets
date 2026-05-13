@@ -1,6 +1,7 @@
 <Solution>
-  <Project Path="DropshipIntegrationService/DropshipIntegrationService.csproj" />
   <Project Path="GatewayService/GatewayService.csproj" />
   <Project Path="OrderService/OrderService.csproj" />
   <Project Path="PaymentService/PaymentService.csproj" />
+  <Project Path="ReservationService/ReservationService.csproj" />
+  <Project Path="TicketCatalogService/TicketCatalogService.csproj" />
 </Solution>
