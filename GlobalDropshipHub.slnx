@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="DropshipIntegrationService/DropshipIntegrationService.csproj" />
+  <Project Path="GatewayService/GatewayService.csproj" />
+  <Project Path="OrderService/OrderService.csproj" />
+  <Project Path="PaymentService/PaymentService.csproj" />
+</Solution>
