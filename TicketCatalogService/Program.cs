@@ -1,44 +1,43 @@
 using TicketCatalogService.Models;
 using TicketCatalogService.Services;
-using MassTransit; // Necessário para o RabbitMQ
+using MassTransit; 
+using MongoDB.Driver;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Injeção de Dependência do nosso serviço MongoDB
+// Lê a conexão do Mongo para o HealthCheck saber onde testar
+var mongoConn = builder.Configuration.GetSection("MongoDbSettings:ConnectionString").Value;
+
 builder.Services.AddScoped<CatalogService>();
 
-// 2. Configuração do MassTransit (RabbitMQ)
+builder.Services.AddHealthChecks()
+    .AddMongoDb(sp => new MongoClient(mongoConn), name: "MongoDB-CatalogDb");
+
 builder.Services.AddMassTransit(x =>
 {
     x.UsingRabbitMq((context, cfg) =>
     {
-        cfg.Host("localhost", "/", h => {
-            h.Username("guest");
-            h.Password("guest");
-        });
+        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
     });
 });
 
-// 3. Configuração da Documentação (Swagger)
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// 4. Força a interface visual do Swagger a aparecer sempre
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// 5. Endpoints da nossa API de Ingressos
+// 🔥 ROTA DE HEALTH CHECK
+app.MapHealthChecks("/health");
 
-// Rota GET: Retorna todos os eventos do MongoDB
 app.MapGet("/api/events", async (CatalogService catalogService) =>
 {
     var events = await catalogService.GetAsync();
     return Results.Ok(events);
 });
 
-// Rota POST: Cria um novo evento no MongoDB e dispara o evento no RabbitMQ
 app.MapPost("/api/events", async (EventTicket newEvent, CatalogService catalogService) =>
 {
     await catalogService.CreateAsync(newEvent);

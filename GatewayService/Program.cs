@@ -1,28 +1,71 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. CONFIGURAÇÃO DE CORS (Essencial para o Frontend Angular conseguir acessar)
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowFrontend", policy =>
+var jwtSecret = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30";
+var key = Encoding.ASCII.GetBytes(jwtSecret);
+
+// 1. Configura o Cadeado (JWT)
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
-        policy.AllowAnyOrigin()  // Permite qualquer URL (como localhost:4200)
-              .AllowAnyMethod()  // Permite GET, POST, PUT, DELETE
-              .AllowAnyHeader(); // Permite qualquer cabeçalho
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = false,
+            ValidateAudience = false
+        };
     });
+
+// 2. Cria a política "RequireLoggedIn" que o appsettings.json está procurando
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("RequireLoggedIn", policy => policy.RequireAuthenticatedUser());
 });
 
-// 2. Adiciona o serviço do YARP lendo do appsettings.json
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
 var app = builder.Build();
 
-// 3. ATIVAR O CORS (Tem que vir ANTES do MapReverseProxy)
 app.UseCors("AllowFrontend");
 
-app.MapGet("/", () => "🌐 API Gateway (YARP) está online. Roteando o tráfego da Dropship Hub!");
+// Ativa a segurança
+app.UseAuthentication();
+app.UseAuthorization();
 
-// 4. Liga a turbina do Proxy
+// Rota de Login para gerar o Token
+app.MapPost("/api/login", (LoginRequest request) =>
+{
+    if (request.Email == "admin@dropship.com" && request.Password == "123456")
+    {
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(new[] { new Claim(ClaimTypes.Name, request.Email) }),
+            Expires = DateTime.UtcNow.AddHours(2),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+        };
+        var token = tokenHandler.CreateToken(tokenDescriptor);
+        return Results.Ok(new { Token = tokenHandler.WriteToken(token) });
+    }
+    return Results.Unauthorized();
+});
+
+app.MapGet("/", () => "🔒 API Gateway Seguro (YARP) está online.");
+
 app.MapReverseProxy();
 
 app.Run();
+
+public record LoginRequest(string Email, string Password);

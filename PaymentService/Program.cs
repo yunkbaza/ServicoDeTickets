@@ -6,7 +6,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Configuração do MassTransit (RabbitMQ)
 builder.Services.AddMassTransit(x =>
 {
-    // Adiciona o consumidor que acabamos de criar
     x.AddConsumer<TicketReservedEventConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
@@ -19,6 +18,8 @@ builder.Services.AddMassTransit(x =>
         // Cria a fila exclusiva de pagamentos
         cfg.ReceiveEndpoint("payment-service-queue", e =>
         {
+            e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(5)));
+
             e.ConfigureConsumer<TicketReservedEventConsumer>(context);
         });
     });
@@ -26,6 +27,6 @@ builder.Services.AddMassTransit(x =>
 
 var app = builder.Build();
 
-app.MapGet("/", () => "💳 Serviço de Pagamentos online e escutando a fila de SAGA!");
+app.MapGet("/", () => "💳 Serviço de Pagamentos blindado com Retry e DLQ!");
 
 app.Run();
