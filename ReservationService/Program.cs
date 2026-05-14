@@ -1,41 +1,32 @@
+using MassTransit;
+using ReservationService.Consumers;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+// 1. Configuração do MassTransit (RabbitMQ) como OUVINTE (Consumer)
+builder.Services.AddMassTransit(x =>
+{
+    // Avisa o MassTransit que temos a classe consumidora
+    x.AddConsumer<ShowCreatedEventConsumer>();
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h => {
+            h.Username("guest");
+            h.Password("guest");
+        });
+
+        // 2. CRIA A FILA: O MassTransit vai criar essa fila no RabbitMQ e ligá-la à Exchange do evento
+        cfg.ReceiveEndpoint("reservation-service-queue", e =>
+        {
+            e.ConfigureConsumer<ShowCreatedEventConsumer>(context);
+        });
+    });
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
-
-app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+// Rota básica só para sabermos que a API está viva
+app.MapGet("/", () => "🎫 Serviço de Reservas online e escutando o RabbitMQ!");
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
