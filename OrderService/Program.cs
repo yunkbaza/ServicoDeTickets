@@ -1,41 +1,42 @@
+using MassTransit;
+using MongoDB.Driver;
+using OrderService.Consumers;
+using OrderService.Models;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+// 1. Configuração do MassTransit
+builder.Services.AddMassTransit(x =>
+{
+    x.AddConsumer<PaymentAcceptedEventConsumer>();
+    
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+        
+        cfg.ReceiveEndpoint("order-service-queue", e =>
+        {
+            e.ConfigureConsumer<PaymentAcceptedEventConsumer>(context);
+        });
+    });
+});
+
+// 2. Injeção do MongoDB para usarmos na rota GET
+builder.Services.AddSingleton(sp => 
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var client = new MongoClient(config["MongoDbSettings:ConnectionString"]);
+    return client.GetDatabase(config["MongoDbSettings:DatabaseName"]).GetCollection<TicketOrder>("Orders");
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
+app.MapGet("/", () => "📦 Serviço de Pedidos online. Aguardando pagamentos...");
 
-app.UseHttpsRedirection();
-
-var summaries = new[]
+// Rota para listar os ingressos emitidos
+app.MapGet("/api/orders", async (IMongoCollection<TicketOrder> collection) => 
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    return await collection.Find(_ => true).ToListAsync();
+});
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
