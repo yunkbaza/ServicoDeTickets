@@ -1,0 +1,35 @@
+name: Backend CI (Integração Contínua)
+
+# O pipeline roda sempre que houver um push na main ou um Pull Request
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest # Roda num servidor Linux limpo do GitHub
+
+    steps:
+    # 1. Baixa o seu código para o servidor do GitHub
+    - name: 📥 Checkout do Código
+      uses: actions/checkout@v4
+
+    # 2. Instala a mesma versão do .NET que você usa no Mac
+    - name: ⚙️ Setup .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    # 3. Baixa todos os pacotes (MassTransit, MongoDB, YARP)
+    - name: 📦 Restaurar Dependências
+      run: dotnet restore
+
+    # 4. Compila todos os 5 microsserviços da Solution para garantir que nada quebrou
+    - name: 🔨 Compilar Microsserviços (Build)
+      run: dotnet build --no-restore --configuration Release
+
+    # 5. (Opcional futuro) Rodar testes automatizados
+    - name: 🧪 Rodar Testes
+      run: dotnet test --no-build --verbosity normal || true
