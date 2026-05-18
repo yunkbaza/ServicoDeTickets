@@ -2,10 +2,10 @@ using TicketCatalogService.Models;
 using TicketCatalogService.Services;
 using MassTransit; 
 using MongoDB.Driver;
+using TicketCatalogService.Consumers; // <-- Importando o consumidor
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Lê a conexão do Mongo para o HealthCheck saber onde testar
 var mongoConn = builder.Configuration.GetSection("MongoDbSettings:ConnectionString").Value;
 
 builder.Services.AddScoped<CatalogService>();
@@ -13,11 +13,21 @@ builder.Services.AddScoped<CatalogService>();
 builder.Services.AddHealthChecks()
     .AddMongoDb(sp => new MongoClient(mongoConn), name: "MongoDB-CatalogDb");
 
+// 🔥 CONFIGURAÇÃO DO RABBITMQ NO CATÁLOGO
 builder.Services.AddMassTransit(x =>
 {
+    // Registra o nosso consumidor que diminui o estoque
+    x.AddConsumer<TicketReservedEventConsumer>();
+
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+        
+        // Cria a fila do Catálogo para ouvir as reservas
+        cfg.ReceiveEndpoint("catalog-service-queue", e =>
+        {
+            e.ConfigureConsumer<TicketReservedEventConsumer>(context);
+        });
     });
 });
 
@@ -29,7 +39,6 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// 🔥 ROTA DE HEALTH CHECK
 app.MapHealthChecks("/health");
 
 app.MapGet("/api/events", async (CatalogService catalogService) =>

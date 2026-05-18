@@ -6,8 +6,8 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var jwtSecret = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30";
-var key = Encoding.ASCII.GetBytes(jwtSecret);
+var jwtSecret = "BazaTicketSuperSecretKeyForJwtAuthentication2026";
+var key = Encoding.UTF8.GetBytes(jwtSecret);
 
 // 1. Configura o Cadeado (JWT)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
