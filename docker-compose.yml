@@ -4,7 +4,7 @@ services:
   # O 'Carteiro' que fará o SAGA funcionar
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: dropship_rabbitmq
+    container_name: bazaticket_rabbitmq
     ports:
       - "5672:5672"   # Porta onde as APIs se conectam
       - "15672:15672" # Porta do painel visual no navegador
@@ -15,7 +15,7 @@ services:
   # O Banco de Dados (usaremos um só contêiner, mas cada API terá seu próprio banco lá dentro)
   mongodb:
     image: mongo:latest
-    container_name: dropship_mongodb
+    container_name: bazaticket_mongodb
     ports:
       - "27017:27017"
     volumes:
