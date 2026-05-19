@@ -1,48 +1,84 @@
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using MassTransit;
+using Stripe;
 
+// 1. O CONTRATO (Clonamos a assinatura do evento que vem da Reserva para o RabbitMQ conseguir ler)
 namespace ReservationService.Events
 {
     public record TicketReservedEvent(string OrderId, string EventId, int Quantity);
 }
 
-namespace PaymentService.Events
-{
-    public record PaymentAcceptedEvent(string OrderId);
-    
-    // 1. ATUALIZAÇÃO: Adicionamos EventId e Quantity para o Rollback SAGA
-    public record PaymentRejectedEvent(string OrderId, string EventId, int Quantity, string Reason);
-}
-
 namespace PaymentService.Consumers
 {
     using ReservationService.Events;
-    using PaymentService.Events;
+
+    // 2. OS EVENTOS DE SAÍDA DO SAGA
+    public record PaymentAcceptedEvent(string OrderId, string EventId, int Quantity);
+    public record PaymentRejectedEvent(string OrderId, string EventId, int Quantity, string Reason);
 
     public class TicketReservedEventConsumer : IConsumer<TicketReservedEvent>
     {
         private readonly ILogger<TicketReservedEventConsumer> _logger;
 
-        public TicketReservedEventConsumer(ILogger<TicketReservedEventConsumer> logger) => _logger = logger;
+        // Injetamos o IConfiguration para ler o appsettings.json!
+        public TicketReservedEventConsumer(ILogger<TicketReservedEventConsumer> logger, IConfiguration configuration)
+        {
+            _logger = logger;
+
+            // Agora a chave vem do cofre, e não está mais exposta no código
+            StripeConfiguration.ApiKey = configuration["Stripe:SecretKey"]; 
+        }
 
         public async Task Consume(ConsumeContext<TicketReservedEvent> context)
         {
             var reserva = context.Message;
-            _logger.LogInformation("💳 Processando pagamento para o Pedido {OrderId}", reserva.OrderId);
+            _logger.LogInformation("💳 Processando pagamento na Stripe para o Pedido: {OrderId}", reserva.OrderId);
 
-            await Task.Delay(2000); // Simula o tempo do Gateway de Pagamento
-
-            var isPaymentApproved = new Random().Next(1, 101) <= 80;
-
-            if (isPaymentApproved)
+            try
             {
-                _logger.LogInformation("✅ Pagamento APROVADO para {OrderId}!", reserva.OrderId);
-                await context.Publish(new PaymentAcceptedEvent(reserva.OrderId));
+                // Prepara a cobrança na Stripe
+                var options = new PaymentIntentCreateOptions
+                {
+                    // O valor na Stripe é em centavos (R$ 150,00 * Quantidade)
+                    Amount = reserva.Quantity * 15000, 
+                    Currency = "brl",
+                    PaymentMethod = "pm_card_visa", // ID de um cartão de teste VISA genérico da Stripe
+                    Confirm = true, // Tenta cobrar imediatamente
+                    AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                    {
+                        Enabled = true,
+                        AllowRedirects = "never" // Isso aqui já diz para a Stripe não pedir ReturnUrl!
+                    }
+                };
+
+                var service = new PaymentIntentService();
+                
+                // Faz a chamada REAL para os servidores da Stripe nos EUA
+                PaymentIntent intent = await service.CreateAsync(options);
+
+                if (intent.Status == "succeeded")
+                {
+                    _logger.LogInformation("✅ Stripe aprovou o pagamento! ID Transação: {StripeId}", intent.Id);
+                    
+                    // Publica no RabbitMQ que deu tudo certo -> O OrderService vai ouvir!
+                    await context.Publish(new PaymentAcceptedEvent(reserva.OrderId, reserva.EventId, reserva.Quantity));
+                }
+                else
+                {
+                    _logger.LogWarning("❌ Pagamento recusado pela Stripe. Status: {Status}", intent.Status);
+                    
+                    // Publica no RabbitMQ que falhou -> O ReservationService faz o Rollback!
+                    await context.Publish(new PaymentRejectedEvent(reserva.OrderId, reserva.EventId, reserva.Quantity, "Recusado pela operadora do cartão"));
+                }
             }
-            else
+            catch (StripeException e)
             {
-                _logger.LogWarning("❌ Pagamento RECUSADO para {OrderId}. Iniciando Rollback SAGA...", reserva.OrderId);
-                // 2. ATUALIZAÇÃO: Enviamos os dados do evento de volta para a fila
-                await context.Publish(new PaymentRejectedEvent(reserva.OrderId, reserva.EventId, reserva.Quantity, "Saldo Insuficiente"));
+                _logger.LogError("🔥 Erro na API da Stripe: {Mensagem}", e.StripeError.Message);
+                
+                // Rollback pelo SAGA caso dê exceção na Stripe (ex: cartão sem limite)
+                await context.Publish(new PaymentRejectedEvent(reserva.OrderId, reserva.EventId, reserva.Quantity, e.StripeError.Message));
             }
         }
     }
