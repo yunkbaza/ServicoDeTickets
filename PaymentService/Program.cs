@@ -19,28 +19,17 @@ builder.Services.AddMassTransit(x =>
 
     // 2. Configura a conexão com o RabbitMQ
     x.UsingRabbitMq((context, cfg) =>
+{
+    cfg.Host("localhost", "/", h => {
+        h.Username("guest");
+        h.Password("guest");
+    });
+    
+    // 🔥 ISSO AQUI EVITA O ERRO DE CONEXÃO REJEITADA
+    cfg.ReceiveEndpoint("payment-service-queue", e =>
     {
-        cfg.Host("localhost", "/", h => {
-            h.Username("guest");
-            h.Password("guest");
-        });
-
-        // 3. Cria a Fila Exclusiva de Pagamentos
-        cfg.ReceiveEndpoint("payment-service-queue", e =>
-        {
-            // 🔥 RESILIÊNCIA DE NÍVEL SÊNIOR (Retry Policy)
-            // Se o processamento do cartão falhar (ex: instabilidade na Stripe),
-            // o sistema não desiste na hora. Ele tenta mais 3 vezes, 
-            // esperando 5 segundos entre cada tentativa.
-            e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(5)));
-
-            // ⚠️ O Pulo do Gato (DLQ Automática):
-            // Se falhar nas 3 tentativas, o MassTransit pega essa mensagem e joga 
-            // automaticamente para a Fila de Mortos (payment-service-queue_error).
-            // É lá que o nosso n8n via Docker vai ler para te avisar no Slack/WhatsApp!
-
-            e.ConfigureConsumer<TicketReservedEventConsumer>(context);
-        });
+        e.ConfigureConsumer<TicketReservedEventConsumer>(context);
+    });
     });
 });
 
