@@ -1,25 +1,22 @@
-version: '3.8'
-
 services:
-  # O 'Carteiro' que fará o SAGA funcionar
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: bazaticket_rabbitmq
-    ports:
-      - "5672:5672"   # Porta onde as APIs se conectam
-      - "15672:15672" # Porta do painel visual no navegador
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-
-  # O Banco de Dados (usaremos um só contêiner, mas cada API terá seu próprio banco lá dentro)
   mongodb:
     image: mongo:latest
     container_name: bazaticket_mongodb
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - mongodb_data:/data/db
+    networks:
+      - bazaticket_network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: bazaticket_rabbitmq
+    ports:
+      - "5672:5672" # Porta da aplicação (onde o C# escuta)
+      - "15672:15672" # Painel administrativo visual
+    networks:
+      - bazaticket_network
 
   n8n:
     image: docker.n8n.io/n8nio/n8n
@@ -36,7 +33,15 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     depends_on:
-      - rabbitmq
+      - rabbitmq # O n8n só sobe depois do RabbitMQ
+    networks:
+      - bazaticket_network
 
+# 👇 AQUI ESTÁ A CORREÇÃO DO ERRO DO VOLUME 👇
 volumes:
-  mongo_data:
+  mongodb_data:
+  n8n_data: 
+
+networks:
+  bazaticket_network:
+    driver: bridge
