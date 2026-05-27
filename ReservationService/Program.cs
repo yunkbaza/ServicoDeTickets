@@ -94,10 +94,10 @@ app.MapGet("/", () => "🎫 Serviço de Reservas online, seguro e escutando o Ra
 // ==========================================
 // 🚀 A ROTA MESTRE: LOCK ATÔMICO E SAGA INITIATOR
 // ==========================================
-// O .RequireAuthorization() garante que só chegue aqui quem tem JWT válido
+
 app.MapPost("/api/reservations", async (
     ReservationRequest request,
-    ClaimsPrincipal user, // O .NET injeta automaticamente os dados do usuário do JWT aqui
+    ClaimsPrincipal user, 
     IMongoCollection<TicketInventory> inventory,
     IPublishEndpoint publishEndpoint,
     CancellationToken cancellationToken) =>
