@@ -1,88 +1,149 @@
-    using MassTransit;
-    using MongoDB.Driver;
-    using ReservationService.Consumers;
-    using ReservationService.Models;
-    using ReservationService.Events;
+using System.Security.Claims;
+using System.Text;
+using MassTransit;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using MongoDB.Driver;
+using ReservationService.Consumers;
+using ReservationService.Events;
+using ReservationService.Models;
 
-    var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-    // 1. INJEÇÃO DO MONGODB: Para o podermos usar na nossa rota de vendas
-    var mongoConn = builder.Configuration.GetSection("MongoDbSettings:ConnectionString").Value;
-    var mongoDb = builder.Configuration.GetSection("MongoDbSettings:DatabaseName").Value;
-    var mongoClient = new MongoClient(mongoConn);
-    var database = mongoClient.GetDatabase(mongoDb);
+// ==========================================
+// 1. CONFIGURAÇÃO DE SEGURANÇA (JWT BEARER)
+// ==========================================
+// Esta é a chave exata que o IdentityService usa para assinar o Token.
+var secretKey = "BazaTicketSuperSecretKeyForJwtAuthentication2026"; 
 
-    // Injetamos a "Tabela" de inventário para estar disponível em toda a app
-    builder.Services.AddSingleton(database.GetCollection<TicketInventory>("Inventory"));
-
-    // 2. CONFIGURAÇÃO DO MASSTRANSIT (RABBITMQ)
-    builder.Services.AddMassTransit(x =>
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
-        x.AddConsumer<ShowCreatedEventConsumer>();
-        x.AddConsumer<PaymentRejectedEventConsumer>(); // <-- ADICIONAR ESTA LINHA
-
-        x.UsingRabbitMq((context, cfg) =>
+        options.TokenValidationParameters = new TokenValidationParameters
         {
-            cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
-            
-            cfg.ReceiveEndpoint("reservation-service-queue", e =>
-            {
-                e.ConfigureConsumer<ShowCreatedEventConsumer>(context);
-            });
+            ValidateIssuer = true,
+            ValidIssuer = "BazaTicketIdentity",
+            ValidateAudience = true,
+            ValidAudience = "BazaTicketFrontend",
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+        };
+    });
 
-            // <-- ADICIONAR ESTE NOVO ENDPOINT DE ROLLBACK
-            cfg.ReceiveEndpoint("reservation-rollback-queue", e => 
-            {
-                e.ConfigureConsumer<PaymentRejectedEventConsumer>(context);
-            });
+builder.Services.AddAuthorization();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// ==========================================
+// 2. INJEÇÃO DO MONGODB
+// ==========================================
+var mongoConn = builder.Configuration.GetSection("MongoDbSettings:ConnectionString").Value ?? "mongodb://localhost:27017";
+var mongoDb = builder.Configuration.GetSection("MongoDbSettings:DatabaseName").Value ?? "BazaTicketReservationDb";
+var mongoClient = new MongoClient(mongoConn);
+var database = mongoClient.GetDatabase(mongoDb);
+
+builder.Services.AddSingleton(database.GetCollection<TicketInventory>("Inventory"));
+
+// ==========================================
+// 3. CONFIGURAÇÃO DO MASSTRANSIT (RABBITMQ)
+// ==========================================
+builder.Services.AddMassTransit(x =>
+{
+    // Registra os consumidores que escutam eventos de outros serviços
+    x.AddConsumer<ShowCreatedEventConsumer>();
+    x.AddConsumer<PaymentRejectedEventConsumer>(); 
+
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h => { 
+            h.Username("guest"); 
+            h.Password("guest"); 
+        });
+        
+        // Resiliência: Tenta processar 3 vezes antes de falhar
+        cfg.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(3)));
+
+        // Fila 1: Ouve quando um show é criado no Catálogo para clonar o estoque
+        cfg.ReceiveEndpoint("reservation-service-queue", e =>
+        {
+            e.ConfigureConsumer<ShowCreatedEventConsumer>(context);
+        });
+
+        // Fila 2: Ouve quando um pagamento falha, para DEVOLVER o ingresso ao estoque (Compensação SAGA)
+        cfg.ReceiveEndpoint("reservation-rollback-queue", e => 
+        {
+            e.ConfigureConsumer<PaymentRejectedEventConsumer>(context);
         });
     });
+});
 
-    var app = builder.Build();
+var app = builder.Build();
 
-    app.MapGet("/", () => "🎫 Serviço de Reservas online e escutando o RabbitMQ!");
+// Ativa os middlewares de segurança e Swagger
+app.UseAuthentication();
+app.UseAuthorization();
 
-    // 🚀 A ROTA MESTRE: ALTA CONCORRÊNCIA E SAGA INITIATOR
-    app.MapPost("/api/reservations", async (
-        ReservationRequest request,
-        IMongoCollection<TicketInventory> inventory,
-        IPublishEndpoint publishEndpoint,
-        CancellationToken cancellationToken) =>
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.MapGet("/", () => "🎫 Serviço de Reservas online, seguro e escutando o RabbitMQ!");
+
+// ==========================================
+// 🚀 A ROTA MESTRE: LOCK ATÔMICO E SAGA INITIATOR
+// ==========================================
+// O .RequireAuthorization() garante que só chegue aqui quem tem JWT válido
+app.MapPost("/api/reservations", async (
+    ReservationRequest request,
+    ClaimsPrincipal user, // O .NET injeta automaticamente os dados do usuário do JWT aqui
+    IMongoCollection<TicketInventory> inventory,
+    IPublishEndpoint publishEndpoint,
+    CancellationToken cancellationToken) =>
+{
+    // 1. Extração da Identidade (QUEM ESTÁ COMPRANDO?)
+    var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    var userEmail = user.FindFirst(ClaimTypes.Email)?.Value;
+
+    if (string.IsNullOrEmpty(userId))
     {
-        // --- DEBUG ---
-        Console.WriteLine($"DEBUG: Recebido: EventId={request.EventId}, Qtd={request.Quantity}");
-        var dbName = inventory.Database.DatabaseNamespace.DatabaseName;
-        Console.WriteLine($"DEBUG: Conectado ao banco: {dbName}");
-        // --------------
+        return Results.Unauthorized();
+    }
 
-        var filter = Builders<TicketInventory>.Filter.And(
-            Builders<TicketInventory>.Filter.Eq(x => x.EventId, request.EventId),
-            Builders<TicketInventory>.Filter.Gte(x => x.AvailableTickets, request.Quantity)
-        );
+    Console.WriteLine($"\n[RESERVA INICIADA] Usuário: {userEmail} | Evento: {request.EventId} | Qtd: {request.Quantity}");
 
-        var update = Builders<TicketInventory>.Update.Inc(x => x.AvailableTickets, -request.Quantity);
+    // 2. Lock Atômico no MongoDB (PREVENÇÃO DE OVERBOOKING)
+    var filter = Builders<TicketInventory>.Filter.And(
+        Builders<TicketInventory>.Filter.Eq(x => x.EventId, request.EventId),
+        Builders<TicketInventory>.Filter.Gte(x => x.AvailableTickets, request.Quantity)
+    );
 
-        var result = await inventory.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
+    var update = Builders<TicketInventory>.Update.Inc(x => x.AvailableTickets, -request.Quantity);
 
-        // --- DEBUG ---
-        Console.WriteLine($"DEBUG: Modificados: {result.ModifiedCount}");
-        // --------------
+    var result = await inventory.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
 
-        if (result.ModifiedCount == 0)
-        {
-            return Results.BadRequest(new { 
-                Message = "🔥 Erro: Ingressos esgotados ou quantidade indisponível!",
-                DebugInfo = $"Banco atual: {dbName}"
-            });
-        }
+    if (result.ModifiedCount == 0)
+    {
+        Console.WriteLine("❌ [FALHA] Estoque insuficiente.");
+        return Results.BadRequest(new { Message = "Ingressos esgotados ou quantidade indisponível no momento." });
+    }
 
-        var orderId = Guid.NewGuid().ToString();
-        await publishEndpoint.Publish(new TicketReservedEvent(orderId, request.EventId, request.Quantity), cancellationToken);
+    // 3. SAGA Step 1: Disparo do Evento para a Fila (RabbitMQ)
+    var orderId = Guid.NewGuid().ToString();
+    
+    // NOTA: Passamos o userId no evento para que o OrderService saiba de quem é o ingresso!
+    var reservedEvent = new TicketReservedEvent(orderId, request.EventId, request.Quantity, userId);
+    await publishEndpoint.Publish(reservedEvent, cancellationToken);
 
-        return Results.Ok(new { Message = "✅ Reservado!", OrderId = orderId });
-    });
+    Console.WriteLine($"✅ [SUCESSO] Lock efetuado. OrderId: {orderId}. Aguardando PaymentService...");
 
-    app.Run();
+    return Results.Ok(new { Message = "Reserva iniciada com sucesso!", OrderId = orderId });
+}).RequireAuthorization(); // 👈 FUNDAMENTAL PARA A SEGURANÇA DO ENDPOINT
 
-    // DTO para receber os dados do Frontend
-    public record ReservationRequest(string EventId, int Quantity);
+app.Run();
+
+// ==========================================
+// Mapeamento de DTOs da API
+// ==========================================
+public record ReservationRequest(string EventId, int Quantity);
