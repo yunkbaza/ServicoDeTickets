@@ -1,41 +1,66 @@
-using MassTransit;
-using PaymentService.Consumers;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Stripe;
+using Stripe.Checkout;
+using System.Collections.Generic;
 
 var builder = WebApplication.CreateBuilder(args);
 
-StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"];
-
-builder.Services.AddMassTransit(x =>
+builder.Services.AddCors(options =>
 {
-    x.AddConsumer<TicketReservedEventConsumer>();
-    x.UsingRabbitMq((context, cfg) =>
+    options.AddPolicy("AllowGateway", policy =>
     {
-        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
-        cfg.ReceiveEndpoint("payment-service-queue", e =>
-        {
-            e.ConfigureConsumer<TicketReservedEventConsumer>(context);
-        });
+        policy.WithOrigins("http://localhost:5130", "http://localhost:4200")
+              .AllowAnyMethod()
+              .AllowAnyHeader();
     });
 });
 
 var app = builder.Build();
 
-app.MapPost("/api/payment/create-intent", async (PaymentRequest request) =>
+app.UseCors("AllowGateway");
+
+StripeConfiguration.ApiKey = "sk_test_51P3K2vK3N5n7R8W9...sua_chave_secreta_aqui...";
+
+app.MapPost("/api/payment/create-session", async (CheckoutSessionRequest request) =>
 {
-    var options = new PaymentIntentCreateOptions
+    var options = new SessionCreateOptions
     {
-        Amount = (long)(request.Amount * 100),
-        Currency = "brl",
-        AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions { Enabled = true },
+        PaymentMethodTypes = new List<string> { "card" },
+        LineItems = new List<SessionLineItemOptions>
+        {
+            new SessionLineItemOptions
+            {
+                PriceData = new SessionLineItemPriceDataOptions
+                {
+                    UnitAmount = (long)(request.Price * 100),
+                    Currency = "brl",
+                    ProductData = new SessionLineItemPriceDataProductDataOptions
+                    {
+                        Name = request.EventName,
+                    },
+                },
+                Quantity = request.Quantity,
+            },
+        },
+        Mode = "payment",
+        SuccessUrl = $"http://localhost:4200/checkout/success?eventId={request.EventId}&quantity={request.Quantity}",
+        CancelUrl = "http://localhost:4200/checkout/cancel",
+        Metadata = new Dictionary<string, string>
+        {
+            { "EventId", request.EventId },
+            { "Quantity", request.Quantity.ToString() },
+            { "UserId", request.UserId }
+        }
     };
 
-    var service = new PaymentIntentService();
-    var intent = await service.CreateAsync(options);
+    var service = new SessionService();
+    var session = await service.CreateAsync(options);
 
-    return Results.Ok(new { clientSecret = intent.ClientSecret });
+    return Results.Ok(new { url = session.Url });
 });
 
-app.Run();
+app.Run("http://localhost:5002");
 
-public record PaymentRequest(decimal Amount);
+public record CheckoutSessionRequest(string EventId, string EventName, decimal Price, int Quantity, string UserId);
