@@ -33,10 +33,12 @@ builder.Services.AddAuthorization(options =>
 // 3. CORS Seguro
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowFrontend", policy => 
-        policy.AllowAnyOrigin()
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.WithOrigins("http://localhost:4200")
               .AllowAnyMethod()
-              .AllowAnyHeader());
+              .AllowAnyHeader();
+    });
 });
 
 // Injeta o YARP
