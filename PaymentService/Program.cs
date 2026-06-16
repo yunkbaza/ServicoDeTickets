@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Stripe;
 using Stripe.Checkout;
+using MassTransit;
 using System;
 using System.Collections.Generic;
 
@@ -18,20 +20,27 @@ builder.Services.AddCors(options =>
     });
 });
 
+// 🔥 1. Conectando o PaymentService ao RabbitMQ para avisar o OrderService
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
+        cfg.UseMessageRetry(r => r.Interval(5, TimeSpan.FromSeconds(3)));
+    });
+});
+
 var app = builder.Build();
 app.UseCors("AllowAll");
 
+// 🔥 2. Rota de Criação do Checkout (Atualizada para guardar o OrderId)
 app.MapPost("/api/payment/create-session", async ([FromBody] CheckoutSessionRequest request, IConfiguration config) =>
 {
     try
     {
-        // Lê a chave do appsettings.Development.json
         var stripeKey = config["Stripe:SecretKey"];
-
         if (string.IsNullOrWhiteSpace(stripeKey) || stripeKey.Contains("SUA_CHAVE"))
-        {
-            return Results.BadRequest(new { message = "Configure sua chave real do Stripe no appsettings.Development.json" });
-        }
+            return Results.BadRequest(new { message = "Chave da Stripe não configurada." });
 
         StripeConfiguration.ApiKey = stripeKey;
 
@@ -55,14 +64,15 @@ app.MapPost("/api/payment/create-session", async ([FromBody] CheckoutSessionRequ
                 },
             },
             Mode = "payment",
-            // URLs do Angular com o esquema de Rollback (SAGA)
             SuccessUrl = $"http://localhost:4200/checkout/success",
             CancelUrl = $"http://localhost:4200/checkout/cancel?eventId={request.EventId}&quantity={request.Quantity}",
+            // 👇 Metadados Invisíveis: O Stripe vai guardar isso e nos devolver no Webhook!
             Metadata = new Dictionary<string, string>
             {
                 { "EventId", request.EventId },
                 { "Quantity", request.Quantity.ToString() },
-                { "UserId", request.UserId ?? "anonymous" }
+                { "UserId", request.UserId ?? "anonymous" },
+                { "OrderId", request.OrderId ?? Guid.NewGuid().ToString() } 
             }
         };
 
@@ -71,16 +81,50 @@ app.MapPost("/api/payment/create-session", async ([FromBody] CheckoutSessionRequ
 
         return Results.Ok(new { url = session.Url });
     }
-    catch (StripeException e)
-    {
-        return Results.BadRequest(new { message = e.StripeError.Message });
-    }
     catch (Exception e)
     {
         return Results.BadRequest(new { message = e.Message });
     }
 });
 
+// 🔥 3. O Webhook: O Ouvido Absoluto do Sistema
+app.MapPost("/api/payment/webhook", async (HttpRequest request, IConfiguration config, IPublishEndpoint publishEndpoint) =>
+{
+    var json = await new StreamReader(request.Body).ReadToEndAsync();
+    var endpointSecret = config["Stripe:WebhookSecret"];
+
+    try
+    {
+        // O Stripe assina a mensagem criptograficamente. Isso impede que hackers forjem pagamentos aprovados.
+        var stripeEvent = EventUtility.ConstructEvent(json, request.Headers["Stripe-Signature"], endpointSecret);
+
+        // 🔥 CORREÇÃO: Adicionado 'Stripe.' para garantir a leitura correta do SDK
+        if (stripeEvent.Type == EventTypes.CheckoutSessionCompleted)
+        {
+            var session = stripeEvent.Data.Object as Session;
+
+            var orderId = session.Metadata["OrderId"];
+            var eventId = session.Metadata["EventId"];
+            var quantity = int.Parse(session.Metadata["Quantity"]);
+            var userId = session.Metadata["UserId"];
+
+            // 🚀 SAGA APROVADO: Dispara a ordem final para gerar o bilhete!
+            await publishEndpoint.Publish(new PaymentAcceptedEvent(orderId, eventId, quantity, userId));
+            
+            Console.WriteLine($"\n✅ [WEBHOOK RECEBIDO] O dinheiro caiu! Bilhete para a Order {orderId} gerado via RabbitMQ!\n");
+        }
+
+        return Results.Ok(); // Tem de responder 200 OK para o Stripe não tentar de novo
+    }
+    catch (StripeException e)
+    {
+        Console.WriteLine($"\n❌ [WEBHOOK ERRO DE SEGURANÇA]: {e.Message}");
+        return Results.BadRequest();
+    }
+});
+
 app.Run("http://localhost:5002");
 
-public record CheckoutSessionRequest(string EventId, string EventName, decimal Price, int Quantity, string UserId);
+// Contratos
+public record CheckoutSessionRequest(string EventId, string EventName, decimal Price, int Quantity, string UserId, string OrderId);
+public record PaymentAcceptedEvent(string OrderId, string EventId, int Quantity, string UserId);

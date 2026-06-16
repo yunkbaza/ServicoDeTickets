@@ -140,3 +140,4 @@ app.MapDelete("/api/reservations/{eventId}/{quantity}", async (
 app.Run("http://localhost:5001");
 
 public record ReservationRequest(string EventId, int Quantity);
+public record InventoryUpdatedEvent(string EventId, int AvailableTickets);
