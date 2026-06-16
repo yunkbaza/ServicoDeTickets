@@ -25,7 +25,7 @@ app.MapPost("/api/payment/create-session", async ([FromBody] CheckoutSessionRequ
 {
     try
     {
-        // Lê a chave que você colocou lá no appsettings.Development.json
+        // Lê a chave do appsettings.Development.json
         var stripeKey = config["Stripe:SecretKey"];
 
         if (string.IsNullOrWhiteSpace(stripeKey) || stripeKey.Contains("SUA_CHAVE"))
@@ -55,8 +55,15 @@ app.MapPost("/api/payment/create-session", async ([FromBody] CheckoutSessionRequ
                 },
             },
             Mode = "payment",
-            SuccessUrl = $"http://localhost:4200/checkout/success?eventId={request.EventId}&quantity={request.Quantity}",
-            CancelUrl = "http://localhost:4200/",
+            // URLs do Angular com o esquema de Rollback (SAGA)
+            SuccessUrl = $"http://localhost:4200/checkout/success",
+            CancelUrl = $"http://localhost:4200/checkout/cancel?eventId={request.EventId}&quantity={request.Quantity}",
+            Metadata = new Dictionary<string, string>
+            {
+                { "EventId", request.EventId },
+                { "Quantity", request.Quantity.ToString() },
+                { "UserId", request.UserId ?? "anonymous" }
+            }
         };
 
         var service = new SessionService();
