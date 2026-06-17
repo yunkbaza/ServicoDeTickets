@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -93,6 +95,21 @@ builder.Services.AddMassTransit(x =>
         });
     });
 });
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("BazaTicket.GatewayService"))
+    .WithTracing(tracing =>
+    {
+        tracing.AddAspNetCoreInstrumentation(); // Rastreia quem entra no Gateway
+        tracing.AddHttpClientInstrumentation(); // Rastreia as chamadas do YARP para os outros serviços
+        tracing.AddSource("MassTransit");       // Rastreia as mensagens do RabbitMQ/SignalR
+        
+        // Envia tudo para o Jaeger rodando no Docker
+        tracing.AddOtlpExporter(opt => 
+        {
+            opt.Endpoint = new Uri("http://localhost:4317");
+        });
+    });
 
 var app = builder.Build();
 

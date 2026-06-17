@@ -18,6 +18,15 @@ services:
     networks:
       - bazaticket_network
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: bazaticket_jaeger
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    networks:
+      - bazaticket_network
+
   n8n:
     image: docker.n8n.io/n8nio/n8n
     container_name: bazaticket_n8n
@@ -37,7 +46,6 @@ services:
     networks:
       - bazaticket_network
 
-# 👇 AQUI ESTÁ A CORREÇÃO DO ERRO DO VOLUME 👇
 volumes:
   mongodb_data:
   n8n_data: 
