@@ -1,6 +1,43 @@
-@TicketCatalogService_HostAddress = http://localhost:5222
+@Catalog_HostAddress = http://localhost:5222
 
-GET {{TicketCatalogService_HostAddress}}/weatherforecast/
-Accept: application/json
+### Criar Evento 1 - Stand Up
+POST {{Catalog_HostAddress}}/api/events
+Content-Type: application/json
 
-###
+{
+  "name": "Especial Stand-Up Dev: Bugs em Produção",
+  "description": "Uma noite de risadas garantidas com histórias reais sobre como derrubar servidores.",
+  "category": "Stand Up",
+  "price": 80.00,
+  "eventDate": "2026-10-15T20:00:00.000Z",
+  "totalTickets": 50,
+  "availableTickets": 50
+}
+
+### Criar Evento 2 - Música
+POST {{Catalog_HostAddress}}/api/events
+Content-Type: application/json
+
+{
+  "name": "Festival de Rock C# e Node.js",
+  "description": "O maior festival de tecnologia e música para engenheiros de software.",
+  "category": "Festas e Shows",
+  "price": 150.00,
+  "eventDate": "2026-11-20T18:00:00.000Z",
+  "totalTickets": 120,
+  "availableTickets": 120
+}
+
+### Criar Evento 3 - Teatro
+POST {{Catalog_HostAddress}}/api/events
+Content-Type: application/json
+
+{
+  "name": "O Paradoxo do Arquiteto",
+  "description": "Uma peça dramática sobre as escolhas difíceis entre microsserviços e monólitos.",
+  "category": "Teatros",
+  "price": 120.00,
+  "eventDate": "2026-12-05T19:30:00.000Z",
+  "totalTickets": 30,
+  "availableTickets": 30
+}

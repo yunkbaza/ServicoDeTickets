@@ -2,7 +2,7 @@ using TicketCatalogService.Models;
 using TicketCatalogService.Services;
 using MassTransit; 
 using MongoDB.Driver;
-using TicketCatalogService.Consumers; // <-- Importando o consumidor
+using TicketCatalogService.Consumers; 
 
 var builder = WebApplication.CreateBuilder(args);
 
